@@ -7,6 +7,7 @@ import shutil
 import uuid
 import string
 import time
+import argparse  # Dodane dla obsługi argumentów
 
 # Define the regex pattern to match the JSON file names
 pattern = re.compile(r'message_.*\.json')
@@ -64,17 +65,21 @@ def find_json_files(facebook_dirs):
     return json_files
 
 # Move and rename files to the output folder
-def move_to_output(old_path, media_type, title, creation_timestamp):
+def move_to_output(old_path, media_type, base_name, creation_timestamp):
+    """
+    Kopiuje plik do odpowiedniego podkatalogu output i nadaje nową nazwę.
+    base_name – oczyszczona nazwa (threadName lub sender_name) używana w nazwie pliku.
+    """
     # Create the filename pattern and remove char that can't be in folder name
     creation_date = datetime.fromtimestamp(creation_timestamp)
     creation_date_str = creation_date.strftime('%Y%m%d%H%M%S')
     file_extension = os.path.splitext(old_path)[1]
-    title = re.sub(r'[<>:"/\\|?*]', '', title)
-    title = title.strip()
+    base_name = re.sub(r'[<>:"/\\|?*]', '', base_name)
+    base_name = base_name.strip()
     # Some conversation can have a complete not printable title
-    if len(title) == 0:
-        title = "unknown"
-    new_file_name = title + "_" + creation_date_str + "_" + str(uuid.uuid4()) + file_extension
+    if len(base_name) == 0:
+        base_name = "unknown"
+    new_file_name = base_name + "_" + creation_date_str + "_" + str(uuid.uuid4()) + file_extension
     
     # Select the correct output directory based on media type
     if media_type == "photos":
@@ -168,6 +173,12 @@ def find_media_file(media_path, json_file_path, facebook_directories):
     
     return None
 
+# ---------- Parsowanie argumentów wiersza poleceń ----------
+parser = argparse.ArgumentParser(description='Przetwarzanie mediów z plików JSON Facebook Messenger')
+parser.add_argument('-s', action='store_true', help='Użyj sender_name do nazewnictwa plików zamiast nazwy wątku')
+args = parser.parse_args()
+use_sender_name = args.s
+
 # Create folders
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
@@ -191,6 +202,7 @@ for fb_dir in facebook_directories:
 # Find all JSON files (in Facebook directories or current directory)
 json_files = find_json_files(facebook_directories)
 print(f"Found {len(json_files)} JSON files to process")
+print(f"Tryb nazewnictwa: {'sender_name' if use_sender_name else 'nazwa wątku (title)'}")
 
 # Process each JSON file
 for file_path in json_files:
@@ -218,6 +230,15 @@ for file_path in json_files:
             # Get timestamp from message as fallback for GIFs
             message_timestamp = message.get('timestamp_ms', 0) // 1000 if 'timestamp_ms' in message else int(time.time())
             
+            # Pobierz sender_name z wiadomości (jeśli dostępny)
+            sender_name = message.get('sender_name', '')
+            # Oczyszczenie nazwy nadawcy
+            if sender_name:
+                sender_name = re.sub(r'[<>:"/\\|?*]', '', sender_name)
+                sender_name = sender_name.strip()
+            if not sender_name:
+                sender_name = "unknown"
+            
             for media_type in ["photos", "videos", "gifs"]:
                 if media_type in message:
                     for media in message[media_type]:
@@ -233,12 +254,18 @@ for file_path in json_files:
                         actual_path = find_media_file(path, file_path, facebook_directories)
                         
                         if actual_path:
+                            # Wybierz nazwę bazową w zależności od flagi -s
+                            if use_sender_name:
+                                base_name = sender_name
+                            else:
+                                base_name = title
+                            
                             # Move media to output folder
-                            new_path = move_to_output(actual_path, media_type, title, creation_timestamp)
+                            new_path = move_to_output(actual_path, media_type, base_name, creation_timestamp)
                             # Change metadata of the moved media
                             change_metadata_date(new_path, creation_timestamp)
                             count += 1
-                            print(f"Processed {media_type}: {os.path.basename(actual_path)}")
+                            print(f"Processed {media_type}: {os.path.basename(actual_path)} -> {os.path.basename(new_path)} (nazwa: {base_name})")
                         else:
                             print(f"Warning: Media file not found: {path}")
         
